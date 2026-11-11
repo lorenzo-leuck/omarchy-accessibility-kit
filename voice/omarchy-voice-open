@@ -1,0 +1,221 @@
+#!/usr/bin/python3
+"""Local, allowlisted voice launch commands; no shell interpretation."""
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+
+def notify(message):
+    subprocess.run(['notify-send', '--app-name=Voice commands', '--expire-time=4000',
+                    'Voice commands', message], check=False, timeout=5)
+
+
+def close_windows(target, dry_run=False):
+    if target != 'all' and (type(target) is not int or target not in range(1, 11)):
+        raise ValueError('Invalid close target')
+    result = subprocess.run(['hyprctl', '-j', 'clients'], capture_output=True,
+                            text=True, check=True, timeout=5)
+    clients = json.loads(result.stdout)
+    # Snapshot exact addresses, never focus a workspace and blindly close its active window.
+    addresses = list(dict.fromkeys(c.get('address') for c in clients
+                     if (target == 'all' or c.get('workspace', {}).get('id') == target)
+                     and re.fullmatch(r'0x[0-9a-fA-F]+', c.get('address', ''))))
+    if dry_run:
+        print(json.dumps({'action': 'close', 'workspace': target, 'addresses': addresses}))
+        return 0
+    if not addresses:
+        notify('No windows to close' + ('.' if target == 'all' else ' on workspace ' + str(target) + '.'))
+        return 0
+    failed = 0
+    for address in addresses:
+        result = subprocess.run(['hyprctl', 'eval',
+                                 'hl.dispatch(hl.dsp.window.close({window="address:' + address + '"}))'],
+                                capture_output=True, text=True, timeout=5)
+        if result.returncode or 'error' in result.stdout.lower():
+            failed += 1
+    # Read back for feedback; never force-kill or repeat a request if an app asks to save.
+    after = subprocess.run(['hyprctl', '-j', 'clients'], capture_output=True,
+                           text=True, check=True, timeout=5)
+    remaining = sum(c.get('address') in addresses for c in json.loads(after.stdout))
+    message = 'Sent ' + str(len(addresses) - failed) + ' close request(s).'
+    if remaining:
+        message += ' ' + str(remaining) + ' window(s) still open; check for save prompts.'
+    if failed:
+        message += ' ' + str(failed) + ' request(s) failed.'
+    notify(message)
+    return 1 if failed else 0
+
+
+def launch(text, dry_run=False):
+    target = close_for(text)
+    if target is not None:
+        return close_windows(target, dry_run)
+    command = request_for(text)
+    if command is None:
+        notify('Not recognized. Say open plus an app, close one through ten, or close all.')
+        return 2
+    command, workspace = command
+    if dry_run:
+        print(json.dumps(command if workspace is None else {'command': command, 'workspace': workspace}))
+        return 0
+    if workspace is not None:
+        # Only a validated integer is interpolated into this fixed Lua expression.
+        result = subprocess.run(['hyprctl', 'eval',
+                                 'hl.dispatch(hl.dsp.focus({workspace="' + str(workspace) + '"}))'],
+                                capture_output=True, text=True, timeout=5)
+        if result.returncode:
+            notify('Could not switch workspace; the app was not launched.')
+            return 1
+        deadline = time.monotonic() + 2
+        while True:
+            active = subprocess.run(['hyprctl', '-j', 'activeworkspace'],
+                                    capture_output=True, text=True, check=True, timeout=5)
+            if json.loads(active.stdout).get('id') == workspace:
+                break
+            if time.monotonic() >= deadline:
+                notify('Workspace switch did not complete; the app was not launched.')
+                return 1
+            time.sleep(0.05)
+    # Only fixed argument lists are executed. Spoken text is never shell code.
+    child = subprocess.Popen(command, cwd=Path.home(), start_new_session=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+    try:
+        result = child.wait(timeout=0.4)
+    except subprocess.TimeoutExpired:
+        result = 0
+    if result:
+        notify('The default launcher failed. Check your Omarchy default application.')
+        return 1
+    label = next(name for name, argv in COMMANDS.items() if argv == command)
+    notify('Opening ' + label + ((' in workspace ' + str(workspace)) if workspace else ''))
+    return 0
+
+
+def recording(action):
+    os.umask(0o077)
+    runtime = Path(os.environ['XDG_RUNTIME_DIR']) / 'omarchy-voice-open'
+    runtime.mkdir(mode=0o700, exist_ok=True)
+    pending = runtime / 'pending.json'
+    with (runtime / 'lock').open('a') as lock:
+        try:
+            flags = fcntl.LOCK_EX | (fcntl.LOCK_NB if action == 'start' else 0)
+            fcntl.flock(lock, flags)
+        except BlockingIOError:
+            notify('Still processing the previous voice command.')
+            return 1
+        if action == 'start':
+            status = subprocess.run(['voxtype', 'status', '--format', 'json'],
+                                    capture_output=True, text=True, check=True, timeout=5)
+            if json.loads(status.stdout).get('class') != 'idle':
+                notify('Voxtype is busy. Finish your current recording first.')
+                return 1
+            if pending.exists():
+                old = json.loads(pending.read_text())
+                shutil.rmtree(runtime / old['session'], ignore_errors=True)
+                pending.unlink()
+            session = Path(tempfile.mkdtemp(prefix='recording-', dir=runtime))
+            transcript = session / 'transcript.txt'
+            pending.write_text(json.dumps({'session': session.name, 'created': time.monotonic()}))
+            result = subprocess.run(['voxtype', 'record', 'start', '--file=' + str(transcript),
+                                     '--model', 'small',
+                                     '--no-auto-submit', '--no-smart-auto-submit'],
+                                    capture_output=True, text=True, timeout=10)
+            if result.returncode:
+                pending.unlink(missing_ok=True)
+                shutil.rmtree(session, ignore_errors=True)
+                notify('Could not start Voxtype. Check that its service is running.')
+                return 1
+            return 0
+        if not pending.exists():
+            return 0  # Never stop a recording started by F9.
+        record = json.loads(pending.read_text())
+        session = runtime / record['session']
+        transcript = session / 'transcript.txt'
+        try:
+            if time.monotonic() - record['created'] > 180:
+                notify('Old voice command discarded. Hold F8 and try again.')
+                return 1
+            result = subprocess.run(['voxtype', 'record', 'stop', '--wait', '--json',
+                                     '--wait-file', str(transcript), '--timeout', '120'],
+                                    capture_output=True, text=True, timeout=130)
+            if result.returncode or not transcript.is_file():
+                notify('No command transcribed. Hold F8, speak, then release it.')
+                return 1
+            return launch(transcript.read_text())
+        finally:
+            pending.unlink(missing_ok=True)
+            shutil.rmtree(session, ignore_errors=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', choices=['start', 'stop', 'run'])
+    parser.add_argument('text', nargs='?')
+    parser.add_argument('--dry-run', action='store_true')
+    args = parser.parse_args()
+    try:
+        if args.action == 'run':
+            return launch(args.text or '', args.dry_run)
+        return recording(args.action)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        print('Voice command failed: ' + str(error), file=sys.stderr)
+        try:
+            notify('Voice command failed. No command was intentionally typed. Try again.')
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return 1
+
+COMMANDS = {
+    'agent': ['omarchy', 'agent'],
+    'browser': ['omarchy', 'launch', 'browser'],
+    'files': ['omarchy', 'launch', 'nautilus'],
+    'terminal': ['omarchy', 'launch', 'terminal'],
+    # Match Super+Shift+N: CLI dispatcher requires a path, direct launcher does not.
+    'editor': ['omarchy-launch-editor'],
+}
+
+def close_for(text):
+    phrase = ' '.join(text.lower().strip().split()).rstrip('.!?')
+    if phrase == 'close all':
+        return 'all'
+    match = re.fullmatch(r'close (?:workspace )?([a-z]+|[0-9]+)', phrase)
+    if not match:
+        return None
+    numbers = dict(zip(('one', 'two', 'three', 'four', 'five', 'six', 'seven',
+                        'eight', 'nine', 'ten'), range(1, 11)))
+    target = int(match[1]) if match[1].isdigit() else numbers.get(match[1])
+    return target if target in range(1, 11) else None
+
+
+def request_for(text):
+    phrase = ' '.join(text.lower().strip().split()).rstrip('.!?')
+    match = re.fullmatch(r'open (agent|browser|files|terminal|editor)'
+                         r'(?: (?:in|on) (?:workspace )?([a-z]+|[0-9]+))?', phrase)
+    if not match:
+        return None
+    workspace = None
+    if match[2] is not None:
+        names = dict(zip(('one', 'two', 'three', 'four', 'five', 'six', 'seven',
+                          'eight', 'nine', 'ten'), range(1, 11)))
+        workspace = int(match[2]) if match[2].isdigit() else names.get(match[2])
+        if workspace not in range(1, 11):
+            return None
+    return COMMANDS[match[1]].copy(), workspace
+
+
+def command_for(text):
+    request = request_for(text)
+    return request[0] if request else None
+
+
+if __name__ == '__main__':
+    sys.exit(main())

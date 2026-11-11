@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "omarchy-accessibility.keyboard",
+  "name": "Accessibility Kit Keyboard",
+  "version": "1.0.0",
+  "author": "Lorenzo",
+  "license": "MIT",
+  "description": "Toggle the wvkbd on-screen keyboard from the Omarchy bar",
+  "kinds": ["bar-widget"],
+  "entryPoints": {"barWidget": "keyboard/BarWidget.qml"},
+  "barWidget": {
+    "displayName": "On-screen keyboard",
+    "description": "Click to show or close the on-screen keyboard",
+    "category": "Accessibility",
+    "defaultSection": "right",
+    "allowMultiple": false
+  }
+}
