@@ -1,0 +1,38 @@
+-- Keep only your personal keybinding overrides here. Add new bindings or
+-- unbind defaults before replacing them.
+
+-- See current bindings and descriptions:
+--   omarchy menu keybindings --print
+
+-- To disable every Omarchy default binding, set this in
+-- ~/.config/hypr/hyprland.lua before require("default.hypr.omarchy"), then add
+-- only the bindings you want below:
+--   omarchy_default_bindings = false
+
+-- To disable all preinstalled app/webapp bindings, set:
+--   omarchy_preinstalled_bindings = false
+
+-- Add a new binding.
+-- o.bind("SUPER + SHIFT + R", "SSH", "alacritty -e ssh your-server")
+
+-- Change an existing binding by unbinding it first, then binding the key again.
+-- Move Agent picker to SUPER + SHIFT + A, replacing the ChatGPT shortcut.
+hl.unbind("SUPER + SHIFT + A")
+o.bind("SUPER + SHIFT + A", "Agent", "omarchy-agent --pick")
+
+
+-- Disable a default binding without replacing it.
+-- hl.unbind("SUPER + SHIFT + B")
+
+-- Logitech MX Keys examples:
+-- o.bind("SUPER + SHIFT + S", nil, "omarchy-capture-screenshot")
+-- o.bind("SUPER + H", nil, "voxtype record toggle")
+-- o.bind("SUPER + PERIOD", nil, "omarchy-shell shell toggle omarchy.emojis")
+
+-- Local voice launch commands: hold F8, speak, release. F9 stays dictation.
+o.bind("F8", "Start voice command (push-to-talk)", "/home/lorenzo/.local/bin/omarchy-voice-open start")
+o.bind("F8", "Run voice command (release)", "/home/lorenzo/.local/bin/omarchy-voice-open stop", { release = true })
+
+-- Move split orientation toggle from SUPER + J to SUPER + SEMICOLON.
+hl.unbind("SUPER + J")
+o.bind("SUPER + SEMICOLON", "Toggle window split", "hyprctl dispatch togglesplit")

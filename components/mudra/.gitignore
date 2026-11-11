@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+# model weights are fetched by setup.sh
+*.onnx

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "lorenzo.keyboard",
+  "name": "On-screen keyboard",
+  "version": "1.0.0",
+  "author": "Lorenzo",
+  "description": "Launches the on-screen keyboard from the Omarchy bar",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "On-screen keyboard",
+    "description": "Click to show the on-screen keyboard",
+    "category": "Accessibility",
+    "allowMultiple": false
+  }
+}

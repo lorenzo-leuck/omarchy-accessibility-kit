@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "lorenzo.hand-mouse",
+  "name": "Hand-tracking mouse",
+  "version": "1.0.0",
+  "author": "Lorenzo",
+  "description": "Toggle Mudra webcam hand tracking",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Hand-tracking mouse",
+    "description": "Start or stop webcam pointer control",
+    "category": "Accessibility",
+    "allowMultiple": false
+  }
+}
